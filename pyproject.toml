@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookdatamaker"
+version = "0.1.0"
+description = "CLI tool for extracting text with DeepSeek OCR and generating datasets"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = {text = "MIT"}
+authors = [
+    {name = "Book Data Maker", email = "contact@example.com"}
+]
+dependencies = [
+    "click",
+    "httpx",
+    "openai",
+    "mcp",
+    "pyarrow",
+    "pandas",
+    "python-dotenv",
+    "rich",
+    "aiofiles",
+    "Pillow",
+    "tqdm",
+    "PyMuPDF",
+    "ebooklib",
+    "beautifulsoup4",
+]
+
+[project.optional-dependencies]
+local = [
+    "transformers",
+    "torch",
+    "flash-attn",
+]
+document = [
+    "PyMuPDF",
+    "ebooklib",
+    "beautifulsoup4",
+]
+all = [
+    "transformers",
+    "torch",
+    "flash-attn",
+    "PyMuPDF",
+    "ebooklib",
+    "beautifulsoup4",
+]
+
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+bookdatamaker = "bookdatamaker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

@@ -1,0 +1,19 @@
+click
+httpx
+openai
+mcp
+pyarrow
+pandas
+python-dotenv
+rich
+aiofiles
+Pillow
+tqdm
+PyMuPDF
+ebooklib
+beautifulsoup4
+
+# Optional: for self-hosted models
+# transformers
+# torch
+# flash-attn
