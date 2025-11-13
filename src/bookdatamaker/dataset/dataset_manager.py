@@ -30,7 +30,7 @@ class DatasetManager:
             CREATE TABLE IF NOT EXISTS dataset (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 prompt TEXT NOT NULL,
-                response TEXT NOT NULL,
+                completion TEXT NOT NULL,
                 metadata TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -64,14 +64,14 @@ class DatasetManager:
     def add_entry(
         self, 
         prompt: str, 
-        response: str,
+        completion: str,
         metadata: Optional[Dict] = None
     ) -> int:
         """Add a Q&A entry to the dataset.
 
         Args:
             prompt: Question or prompt text
-            response: Answer or response text
+            completion: Answer or completion text
             metadata: Optional metadata (e.g., source location)
 
         Returns:
@@ -81,8 +81,8 @@ class DatasetManager:
         metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
         
         cursor.execute(
-            "INSERT INTO dataset (prompt, response, metadata) VALUES (?, ?, ?)",
-            (prompt, response, metadata_json)
+            "INSERT INTO dataset (prompt, completion, metadata) VALUES (?, ?, ?)",
+            (prompt, completion, metadata_json)
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -98,7 +98,7 @@ class DatasetManager:
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, prompt, response, metadata, created_at FROM dataset WHERE id = ?",
+            "SELECT id, prompt, completion, metadata, created_at FROM dataset WHERE id = ?",
             (entry_id,)
         )
         row = cursor.fetchone()
@@ -107,7 +107,7 @@ class DatasetManager:
             return {
                 "id": row[0],
                 "prompt": row[1],
-                "response": row[2],
+                "completion": row[2],
                 "metadata": json.loads(row[3]) if row[3] else None,
                 "created_at": row[4]
             }
@@ -121,7 +121,7 @@ class DatasetManager:
         """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, prompt, response, metadata, created_at FROM dataset ORDER BY id"
+            "SELECT id, prompt, completion, metadata, created_at FROM dataset ORDER BY id"
         )
         
         entries = []
@@ -129,7 +129,7 @@ class DatasetManager:
             entries.append({
                 "id": row[0],
                 "prompt": row[1],
-                "response": row[2],
+                "completion": row[2],
                 "metadata": json.loads(row[3]) if row[3] else None,
                 "created_at": row[4]
             })
@@ -161,10 +161,10 @@ class DatasetManager:
         
         with output_file.open("w", encoding="utf-8") as f:
             for entry in entries:
-                # Write only prompt and response (no metadata for simplicity)
+                # Write only prompt and completion (no metadata for simplicity)
                 record = {
                     "prompt": entry["prompt"],
-                    "response": entry["response"]
+                    "completion": entry["completion"]
                 }
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         
@@ -188,7 +188,7 @@ class DatasetManager:
         # Prepare data for DataFrame
         data = {
             "prompt": [e["prompt"] for e in entries],
-            "response": [e["response"] for e in entries]
+            "completion": [e["completion"] for e in entries]
         }
         
         if include_metadata:
@@ -221,7 +221,7 @@ class DatasetManager:
         # Prepare data for DataFrame
         data = {
             "prompt": [e["prompt"] for e in entries],
-            "response": [e["response"] for e in entries]
+            "completion": [e["completion"] for e in entries]
         }
         
         if include_metadata:
@@ -249,9 +249,9 @@ class DatasetManager:
         entries = self.get_all_entries()
         
         if not include_metadata:
-            # Simplify entries to only prompt/response
+            # Simplify entries to only prompt/completion
             entries = [
-                {"prompt": e["prompt"], "response": e["response"]}
+                {"prompt": e["prompt"], "completion": e["completion"]}
                 for e in entries
             ]
         

@@ -683,14 +683,14 @@ Remember: You MUST use the tools to accomplish this task. Start by calling jump_
                                 # Execute tool and get result
                                 if function_name == "submit_dataset":
                                     prompt_text = function_args.get("input", "").strip()
-                                    response_text = function_args.get("output", "").strip()
+                                    completion_text = function_args.get("output", "").strip()
                                     
-                                    # Validate that prompt and response are not empty
-                                    if not prompt_text or not response_text:
+                                    # Validate that prompt and completion are not empty
+                                    if not prompt_text or not completion_text:
                                         tool_result = "Error: Both 'input' (question) and 'output' (answer) cannot be empty. Please provide valid content for both fields."
                                         self._log_tool_result(thread_id, function_name, {"error": "Empty input or output"})
                                     else:
-                                        entry_id = dataset_manager.add_entry(prompt_text, response_text)
+                                        entry_id = dataset_manager.add_entry(prompt_text, completion_text)
                                         submitted_count += 1
                                         self._update_progress(1)
                                         
@@ -717,7 +717,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling jump_
                                             "count": submitted_count, 
                                             "remaining": remaining,
                                             "question": prompt_text,
-                                            "answer": response_text
+                                            "answer": completion_text
                                         })
                                     
                                 elif function_name == "exit":

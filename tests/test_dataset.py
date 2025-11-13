@@ -17,7 +17,7 @@ class TestDatasetBuilder:
         """Test adding a single entry."""
         entry = {
             "prompt": "Test input",
-            "response": "Test output",
+            "completion": "Test output",
             "model": "gpt-4",
             "tokens_used": 100,
         }
@@ -30,8 +30,8 @@ class TestDatasetBuilder:
     def test_add_entries(self):
         """Test adding multiple entries."""
         entries = [
-            {"prompt": "Input 1", "response": "Output 1", "model": "gpt-4", "tokens_used": 50},
-            {"prompt": "Input 2", "response": "Output 2", "model": "gpt-4", "tokens_used": 75},
+            {"prompt": "Input 1", "completion": "Output 1", "model": "gpt-4", "tokens_used": 50},
+            {"prompt": "Input 2", "completion": "Output 2", "model": "gpt-4", "tokens_used": 75},
         ]
         
         self.builder.add_entries(entries)
@@ -41,15 +41,15 @@ class TestDatasetBuilder:
     def test_to_dataframe(self):
         """Test converting to DataFrame."""
         entries = [
-            {"prompt": "Input 1", "response": "Output 1", "model": "gpt-4", "tokens_used": 50},
-            {"prompt": "Input 2", "response": "Output 2", "model": "gpt-4", "tokens_used": 75},
+            {"prompt": "Input 1", "completion": "Output 1", "model": "gpt-4", "tokens_used": 50},
+            {"prompt": "Input 2", "completion": "Output 2", "model": "gpt-4", "tokens_used": 75},
         ]
         self.builder.add_entries(entries)
         
         df = self.builder.to_dataframe()
         
         assert len(df) == 2
-        assert list(df.columns) == ["prompt", "response", "model", "tokens_used"]
+        assert list(df.columns) == ["prompt", "completion", "model", "tokens_used"]
 
     def test_save_parquet(self):
         """Test saving to Parquet file."""
@@ -57,7 +57,7 @@ class TestDatasetBuilder:
             output_path = Path(tmpdir) / "test.parquet"
             
             entries = [
-                {"prompt": "Input 1", "response": "Output 1", "model": "gpt-4", "tokens_used": 50},
+                {"prompt": "Input 1", "completion": "Output 1", "model": "gpt-4", "tokens_used": 50},
             ]
             self.builder.add_entries(entries)
             
@@ -72,7 +72,7 @@ class TestDatasetBuilder:
             
             # Save data
             entries = [
-                {"prompt": "Input 1", "response": "Output 1", "model": "gpt-4", "tokens_used": 50},
+                {"prompt": "Input 1", "completion": "Output 1", "model": "gpt-4", "tokens_used": 50},
             ]
             self.builder.add_entries(entries)
             self.builder.save_parquet(output_path)
@@ -87,8 +87,8 @@ class TestDatasetBuilder:
     def test_get_stats(self):
         """Test getting dataset statistics."""
         entries = [
-            {"prompt": "Input 1", "response": "Output 1", "model": "gpt-4", "tokens_used": 50},
-            {"prompt": "Input 2", "response": "Output 2", "model": "gpt-4", "tokens_used": 75},
+            {"prompt": "Input 1", "completion": "Output 1", "model": "gpt-4", "tokens_used": 50},
+            {"prompt": "Input 2", "completion": "Output 2", "model": "gpt-4", "tokens_used": 75},
         ]
         self.builder.add_entries(entries)
         
@@ -100,7 +100,7 @@ class TestDatasetBuilder:
 
     def test_clear(self):
         """Test clearing data."""
-        entry = {"prompt": "Test", "response": "Test", "model": "gpt-4", "tokens_used": 50}
+        entry = {"prompt": "Test", "completion": "Test", "model": "gpt-4", "tokens_used": 50}
         self.builder.add_entry(entry)
         
         self.builder.clear()
