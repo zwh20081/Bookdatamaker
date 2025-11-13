@@ -319,39 +319,66 @@ class OCRExtractor:
 
         return all_results
     
-    def _run_batch_inference(self, images: List[Image.Image], prompts: List[str]) -> List[str]:
-        """Run batch model inference (synchronous helper).
+    def _run_single_inference(self, image: Image.Image, prompt: str) -> str:
+        """Run model inference on single image (synchronous helper).
         
         Args:
-            images: List of PIL Images
-            prompts: List of prompt texts
+            image: PIL Image
+            prompt: Prompt text
             
         Returns:
-            List of extracted texts
+            Extracted text
         """
-        inputs = self.model.prepare_inputs(
-            images=images,
-            prompts=prompts,
-            tokenizer=self.tokenizer
-        )
+        import tempfile
+        import sys
+        import io
+        from tqdm import tqdm
         
-        # Move inputs to GPU
-        inputs = {k: v.cuda() if isinstance(v, torch.Tensor) else v 
-                  for k, v in inputs.items()}
+        # DeepSeek-OCR uses infer() method which needs file path
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Save image temporarily
+            img_path = tmp_path / "temp.png"
+            image.save(img_path)
+            
+            # Capture model output to avoid interfering with tqdm
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+            sys.stdout = stdout_capture
+            sys.stderr = stderr_capture
+            
+            try:
+                # Call model.infer() - DeepSeek-OCR's API
+                # Gundam mode: base_size=1024, image_size=640, crop_mode=True
+                result = self.model.infer(
+                    self.tokenizer,
+                    prompt=prompt,
+                    image_file=str(img_path),
+                    output_path=str(tmp_path),
+                    base_size=1024,
+                    image_size=640,
+                    crop_mode=True,
+                    test_compress=False,
+                    save_results=False
+                )
+            finally:
+                # Restore stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                
+                # Output captured content via tqdm.write to preserve progress bar
+                stdout_content = stdout_capture.getvalue()
+                stderr_content = stderr_capture.getvalue()
+                
+                if stdout_content.strip():
+                    tqdm.write(stdout_content.rstrip())
+                if stderr_content.strip():
+                    tqdm.write(stderr_content.rstrip())
         
-        with torch.no_grad():
-            outputs = self.model.generate(**inputs, max_new_tokens=8192)
-        
-        # Decode outputs
-        output_texts = []
-        for output in outputs:
-            text = self.tokenizer.decode(
-                output.cpu().tolist(), 
-                skip_special_tokens=True
-            )
-            output_texts.append(text)
-        
-        return output_texts
+        return result
 
     def split_into_paragraphs(self, text: str) -> List[str]:
         """Split text into paragraphs.
@@ -449,32 +476,27 @@ class OCRExtractor:
         prompt = "<image>\n<|grounding|>Convert the document to markdown. "
         
         # Process in batches with progress bar
-        with tqdm(total=total_pages, desc="OCR Processing", unit="page") as pbar:
+        with tqdm(total=total_pages, desc="OCR Processing", unit="page", dynamic_ncols=True) as pbar:
             for i in range(0, total_pages, self.batch_size):
                 batch = image_pages[i:i + self.batch_size]
                 
-                # Prepare batch input
-                batch_images = []
-                batch_prompts = []
-                page_numbers = []
-                
-                for page_num, image in batch:
-                    batch_images.append(image.convert("RGB"))
-                    batch_prompts.append(prompt)
-                    page_numbers.append(page_num)
-                
-                # Run batch inference in thread pool
+                # Process each image in batch individually with progress updates
                 loop = asyncio.get_event_loop()
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    output_texts = await loop.run_in_executor(
-                        executor, lambda: self._run_batch_inference(batch_images, batch_prompts)
-                    )
-                
-                # Collect batch results
-                for j, text in enumerate(output_texts):
-                    all_results.append((page_numbers[j], text))
-                
-                # Update progress bar
-                pbar.update(len(batch))
+                    for page_num, image in batch:
+                        # Process single image
+                        rgb_image = image.convert("RGB")
+                        
+                        # Run inference in thread pool
+                        output_text = await loop.run_in_executor(
+                            executor, 
+                            lambda img=rgb_image: self._run_single_inference(img, prompt)
+                        )
+                        
+                        # Collect result
+                        all_results.append((page_num, output_text))
+                        
+                        # Update progress bar immediately
+                        pbar.update(1)
         
         return all_results

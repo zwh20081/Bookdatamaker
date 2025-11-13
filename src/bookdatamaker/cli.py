@@ -130,19 +130,20 @@ async def _extract_async(
             if input_path.is_file():
                 # Check if it's a document (PDF/EPUB) or image
                 if input_path.suffix.lower() in [".pdf", ".epub"]:
-                    # Document processing
+                    # Document processing - force OCR mode
                     status.print_info(f"Processing document: {input_path.suffix.upper()}")
 
                     results = await extractor.extract_from_document(
-                        input_path, prefer_text=True
+                        input_path, prefer_text=False
                     )
 
                     if not results:
                         status.print_warning("No pages extracted")
                         return
 
-                    # Save by page number
-                    for page_num, text in results:
+                    # Save by page number (with progress bar)
+                    from tqdm import tqdm
+                    for page_num, text in tqdm(results, desc="Saving pages", unit="page"):
                         output_file = output_dir / f"page_{page_num:03d}.txt"
                         output_file.write_text(text, encoding="utf-8")
 
@@ -152,6 +153,7 @@ async def _extract_async(
 
                 else:
                     # Single image file
+                    status.print_info("Extracting text from image...")
                     text = await extractor.extract_text(input_path)
 
                     output_file = output_dir / f"{input_path.stem}.txt"
@@ -167,7 +169,9 @@ async def _extract_async(
                     status.print_warning("No images found in directory")
                     return
 
-                for image_path, text in results:
+                # Save files with progress bar
+                from tqdm import tqdm
+                for image_path, text in tqdm(results, desc="Saving files", unit="file"):
                     output_file = output_dir / f"{image_path.stem}.txt"
                     output_file.write_text(text, encoding="utf-8")
 
