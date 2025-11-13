@@ -34,7 +34,7 @@ def cli() -> None:
     "--mode",
     type=click.Choice(["api", "local"]),
     default="api",
-    help="OCR mode: 'api' for DeepSeek API, 'local' for self-hosted vLLM",
+    help="OCR mode: 'api' for DeepSeek API, 'local' for transformers",
 )
 @click.option(
     "--deepseek-api-key",
@@ -51,13 +51,19 @@ def cli() -> None:
     "--local-model-path",
     envvar="LOCAL_OCR_MODEL",
     default="deepseek-ai/DeepSeek-OCR",
-    help="Path to local OCR model for vLLM (default: deepseek-ai/DeepSeek-OCR)",
+    help="Path to local OCR model for transformers (default: deepseek-ai/DeepSeek-OCR)",
 )
 @click.option(
     "--batch-size",
     type=int,
     default=8,
-    help="Batch size for local vLLM processing (default: 8)",
+    help="Batch size for local transformers processing (default: 8)",
+)
+@click.option(
+    "--device",
+    type=str,
+    default="cuda",
+    help="Torch device for local mode (default: cuda). Examples: cuda, cuda:0, cpu",
 )
 def extract(
     input_path: Path,
@@ -67,6 +73,7 @@ def extract(
     deepseek_api_url: str,
     local_model_path: str,
     batch_size: int,
+    device: str,
 ) -> None:
     """Extract text from images using DeepSeek OCR.
 
@@ -85,6 +92,7 @@ def extract(
             deepseek_api_url,
             local_model_path,
             batch_size,
+            device,
         )
     )
 
@@ -97,6 +105,7 @@ async def _extract_async(
     api_url: str,
     local_model_path: str,
     batch_size: int,
+    device: str,
 ) -> None:
     """Async extraction logic."""
     from bookdatamaker.utils import StatusIndicator
@@ -104,8 +113,10 @@ async def _extract_async(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with StatusIndicator() as status:
-        mode_label = "local vLLM" if mode == "local" else "API"
+        mode_label = "local transformers" if mode == "local" else "API"
         status.print_info(f"Mode: {mode_label}")
+        if mode == "local":
+            status.print_info(f"Device: {device}")
         status.print_info(f"Extracting text from: {input_path}")
 
         async with OCRExtractor(
@@ -114,13 +125,13 @@ async def _extract_async(
             mode=mode,
             local_model_path=local_model_path,
             batch_size=batch_size,
+            device=device,
         ) as extractor:
             if input_path.is_file():
                 # Check if it's a document (PDF/EPUB) or image
                 if input_path.suffix.lower() in [".pdf", ".epub"]:
                     # Document processing
                     status.print_info(f"Processing document: {input_path.suffix.upper()}")
-                    task = status.start_task("Extracting pages from document")
 
                     results = await extractor.extract_from_document(
                         input_path, prefer_text=True
@@ -130,30 +141,22 @@ async def _extract_async(
                         status.print_warning("No pages extracted")
                         return
 
-                    status.update_task(
-                        task,
-                        description=f"Saving {len(results)} pages by page number",
-                    )
-
                     # Save by page number
                     for page_num, text in results:
                         output_file = output_dir / f"page_{page_num:03d}.txt"
                         output_file.write_text(text, encoding="utf-8")
 
-                    status.complete_task(task)
                     status.print_success(
                         f"Extracted {len(results)} pages to: {output_dir}"
                     )
 
                 else:
                     # Single image file
-                    task = status.start_task("Extracting text from image", total=1)
                     text = await extractor.extract_text(input_path)
 
                     output_file = output_dir / f"{input_path.stem}.txt"
                     output_file.write_text(text, encoding="utf-8")
 
-                    status.update_task(task, advance=1)
                     status.print_success(f"Saved to: {output_file}")
 
             else:
@@ -164,12 +167,9 @@ async def _extract_async(
                     status.print_warning("No images found in directory")
                     return
 
-                task = status.start_task("Extracting text from images", total=len(results))
-
                 for image_path, text in results:
                     output_file = output_dir / f"{image_path.stem}.txt"
                     output_file.write_text(text, encoding="utf-8")
-                    status.update_task(task, advance=1)
 
                 status.print_success(f"Extracted {len(results)} files to: {output_dir}")
 

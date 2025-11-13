@@ -31,9 +31,12 @@ dependencies = [
 
 [project.optional-dependencies]
 local = [
-    "transformers",
+    "transformers==4.46.3",
     "torch",
     "flash-attn",
+    "einops",
+    "easydict",
+    "addict",
 ]
 document = [
     "PyMuPDF",
@@ -41,9 +44,12 @@ document = [
     "beautifulsoup4",
 ]
 all = [
-    "transformers",
+    "transformers==4.46.3",
     "torch",
     "flash-attn",
+    "einops",
+    "easydict",
+    "addict",
     "PyMuPDF",
     "ebooklib",
     "beautifulsoup4",

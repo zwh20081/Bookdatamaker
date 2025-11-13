@@ -21,6 +21,7 @@ class OCRExtractor:
         mode: Literal["api", "local"] = "api",
         local_model_path: Optional[str] = None,
         batch_size: int = 8,
+        device: str = "cuda",
     ) -> None:
         """Initialize OCR extractor.
 
@@ -30,12 +31,14 @@ class OCRExtractor:
             mode: "api" for API calls, "local" for self-hosted transformers model
             local_model_path: Path to local model (for local mode)
             batch_size: Batch size for local transformers processing
+            device: Torch device for local mode (default: "cuda")
         """
         self.mode = mode
         self.api_key = api_key
         self.api_url = api_url.rstrip("/")
         self.local_model_path = local_model_path or "deepseek-ai/DeepSeek-OCR"
         self.batch_size = batch_size
+        self.device = device
         self.llm = None
 
         if mode == "api":
@@ -63,6 +66,27 @@ class OCRExtractor:
 
     def _init_local_model(self) -> None:
         """Initialize local transformers model."""
+        import importlib.metadata
+        
+        # Check transformers version
+        try:
+            transformers_version = importlib.metadata.version("transformers")
+            if transformers_version != "4.46.3":
+                import warnings
+                warnings.warn(
+                    f"Transformers version {transformers_version} detected. "
+                    f"This project requires transformers==4.46.3 for optimal compatibility. "
+                    f"Please install the correct version:\n"
+                    f"  pip install transformers==4.46.3\n"
+                    f"Continuing with current version, but unexpected issues may occur.",
+                    UserWarning,
+                    stacklevel=2
+                )
+        except importlib.metadata.PackageNotFoundError:
+            raise ImportError(
+                "Transformers not found. Please install it:\n"
+                "  pip install transformers==4.46.3"
+            )
 
         from transformers import AutoModel, AutoTokenizer
         
@@ -75,9 +99,10 @@ class OCRExtractor:
         self.model = AutoModel.from_pretrained(
             self.local_model_path,
             trust_remote_code=True,
-            use_safetensors=True
-        )
-        self.model = self.model.eval().cuda().to(torch.bfloat16)
+            use_safetensors=True,
+            torch_dtype=torch.bfloat16
+        ).to(self.device)
+        self.model = self.model.eval()
         
 
 

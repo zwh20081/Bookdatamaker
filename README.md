@@ -95,8 +95,10 @@ pip install -e .
 
 ```bash
 # For self-hosted OCR and LLM generation
-pip install -e ".[local]"  # Installs transformers, torch, flash-attn
+pip install -e ".[local]"  # Installs transformers==4.46.3, torch, flash-attn, etc.
 ```
+
+**Note**: The project requires `transformers==4.46.3` for optimal compatibility with DeepSeek-OCR. A warning will be displayed if a different version is detected.
 
 ### System Requirements
 
@@ -105,9 +107,10 @@ pip install -e ".[local]"  # Installs transformers, torch, flash-attn
 - API keys (OpenAI, DeepSeek, etc.)
 
 **For Local Mode:**
-- Python 3.10+
-- NVIDIA GPU with CUDA support
-- 16GB+ VRAM recommended
+- Python 3.10-3.12 (3.13 not supported due to vLLM compatibility)
+- NVIDIA GPU with CUDA support (or CPU, though slower)
+- 16GB+ VRAM recommended for GPU
+- transformers==4.46.3
 - Linux or WSL2 (recommended)
 
 ---
@@ -134,16 +137,22 @@ bookdatamaker extract book.pdf \
   -o ./extracted
 ```
 
-### Local Mode
+### Local Mode (Transformers)
 
-Use local transformers model for OCR (no API calls):
+Use local transformers model for OCR (DeepSeek-OCR, no API calls):
 
 ```bash
-# Basic usage
+# Basic usage - uses transformers AutoModel with flash_attention_2
 bookdatamaker extract book.pdf --mode local -o ./extracted
 
 # With custom batch size (adjust based on GPU memory)
 bookdatamaker extract book.pdf --mode local --batch-size 12 -o ./extracted
+
+# Use CPU instead of GPU
+bookdatamaker extract book.pdf --mode local --device cpu -o ./extracted
+
+# Use specific GPU
+bookdatamaker extract book.pdf --mode local --device cuda:1 -o ./extracted
 
 # Process directory of images
 bookdatamaker extract ./images/ --mode local -o ./extracted
@@ -154,6 +163,11 @@ bookdatamaker extract ./images/ --mode local -o ./extracted
 - **8-12**: GPUs with 16GB+ VRAM (default: 8)
 - **4-8**: GPUs with 8-12GB VRAM
 - **1-4**: GPUs with <8GB VRAM
+
+**Device Options:**
+- `cuda` (default): Use default CUDA GPU
+- `cuda:0`, `cuda:1`, etc.: Use specific GPU
+- `cpu`: Use CPU (slower, no GPU required)
 
 ### Output Structure
 
@@ -331,17 +345,32 @@ Thread 5: Start at 80%  → Paragraph 400
 
 ### Extraction (Stage 1)
 
-**Batch Size Optimization:**
+**Batch Size Optimization (Transformers):**
 
 ```bash
-# Maximum speed (24GB+ VRAM)
+# Maximum speed (24GB+ VRAM) - uses transformers with DeepSeek-OCR
 bookdatamaker extract book.pdf --mode local --batch-size 16
 
-# Balanced (16GB VRAM)
+# Balanced (16GB VRAM) - transformers default batch size
 bookdatamaker extract book.pdf --mode local --batch-size 8
 
-# Conservative (<8GB VRAM)
+# Conservative (<8GB VRAM) - smaller batches for limited VRAM
 bookdatamaker extract book.pdf --mode local --batch-size 4
+
+# Use CPU if no GPU available (slower)
+bookdatamaker extract book.pdf --mode local --device cpu --batch-size 2
+```
+
+**Multi-GPU Setup:**
+
+```bash
+# Use specific GPU in multi-GPU system
+bookdatamaker extract book.pdf --mode local --device cuda:0
+bookdatamaker extract book.pdf --mode local --device cuda:1
+
+# Run multiple processes on different GPUs simultaneously
+bookdatamaker extract book1.pdf --mode local --device cuda:0 &
+bookdatamaker extract book2.pdf --mode local --device cuda:1 &
 ```
 
 ### Generation (Stage 2)
@@ -411,6 +440,7 @@ You: What's in paragraph 100?
 | `--output-dir` | optional | `extracted_text` | Output directory |
 | `--mode` | optional | `api` | OCR mode: `api` or `local` |
 | `--batch-size` | optional | `8` | Batch size for local mode |
+| `--device` | optional | `cuda` | Torch device for local mode: `cuda`, `cuda:0`, `cpu` |
 | `--deepseek-api-key` | optional | env var | DeepSeek API key |
 | `--deepseek-api-url` | optional | `https://api.deepseek.com/v1` | DeepSeek API URL |
 | `--local-model-path` | optional | `deepseek-ai/DeepSeek-OCR` | Local model path |
@@ -445,7 +475,9 @@ You: What's in paragraph 100?
 
 **Problem: Out of memory (OCR)**
 - Reduce `--batch-size`
+- Use `--device cpu` to run on CPU instead of GPU
 - Use API mode instead of local
+- Use specific GPU with `--device cuda:0` if you have multiple GPUs
 
 **Problem: Out of memory (Generation)**
 - Reduce thread count (fewer distribution values)
