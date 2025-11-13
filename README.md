@@ -37,6 +37,49 @@ A powerful CLI tool for extracting text from documents using DeepSeek OCR and ge
 - 🌐 **Flexible Modes**: API or self-hosted for both stages
 - 📈 **Progress Tracking**: Real-time progress bars
 
+## Installation
+
+### From PyPI (Recommended)
+
+```bash
+pip install bookdatamaker
+```
+
+### From Source
+
+```bash
+git clone https://github.com/yourusername/bookdatamaker.git
+cd bookdatamaker
+pip install -r requirements.txt
+pip install -e .
+```
+
+### Optional: Local Inference Support
+
+```bash
+# For self-hosted OCR and LLM generation
+pip install bookdatamaker[local]  # From PyPI
+# OR
+pip install -e ".[local]"  # From source - installs transformers==4.46.3, torch, flash-attn, etc.
+```
+
+**Note**: The project requires `transformers==4.46.3` for optimal compatibility with DeepSeek-OCR. A warning will be displayed if a different version is detected.
+
+### System Requirements
+
+**For API Mode:**
+- Python 3.10+
+- API keys (OpenAI, DeepSeek, etc.)
+
+**For Local Mode:**
+- Python 3.10-3.12 (3.13 not supported due to vLLM compatibility)
+- NVIDIA GPU with CUDA support (or CPU, though slower)
+- 16GB+ VRAM recommended for GPU
+- transformers==4.46.3
+- Linux or WSL2 (recommended)
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -51,7 +94,7 @@ export DEEPSEEK_API_KEY=your_deepseek_key    # For API OCR mode
 
 ```bash
 # 1. Install
-pip install -r requirements.txt && pip install -e .
+pip install bookdatamaker
 
 # 2. Extract → Generate → Export
 bookdatamaker extract book.pdf -o ./extracted
@@ -63,7 +106,7 @@ bookdatamaker export-dataset dataset.db -o output.parquet
 
 ```bash
 # 1. Install with local dependencies
-pip install -r requirements.txt && pip install -e ".[local]"
+pip install bookdatamaker[local]
 
 # 2. Extract with local OCR
 bookdatamaker extract book.pdf --mode local --batch-size 8 -o ./extracted
@@ -79,27 +122,9 @@ bookdatamaker generate ./extracted \
 bookdatamaker export-dataset dataset.db -o output.parquet
 ```
 
-## Installation
+---
 
-### Basic Installation
-
-```bash
-git clone https://github.com/yourusername/bookdatamaker.git
-cd bookdatamaker
-pip install -r requirements.txt
-pip install -e .
-```
-
-### Optional: Local Inference Support
-
-```bash
-# For self-hosted OCR and LLM generation
-pip install -e ".[local]"  # Installs transformers==4.46.3, torch, flash-attn, etc.
-```
-
-**Note**: The project requires `transformers==4.46.3` for optimal compatibility with DeepSeek-OCR. A warning will be displayed if a different version is detected.
-
-### System Requirements
+## System Requirements
 
 **For API Mode:**
 - Python 3.10+
