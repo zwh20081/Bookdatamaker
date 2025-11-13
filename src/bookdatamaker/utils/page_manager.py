@@ -73,28 +73,36 @@ class PageManager:
         """Load all pages from directory into memory.
 
         Args:
-            directory: Directory containing page_XXX.txt files
+            directory: Directory containing page_XXX/ subdirectories with result.mmd files
 
         Returns:
             PageManager instance with all pages loaded
         """
         pages = {}
 
-        # Load individual page files
-        for txt_file in sorted(directory.glob("page_*.txt")):
+        # Load from page_XXX subdirectories with result.mmd files
+        for page_dir in sorted(directory.glob("page_*")):
+            if not page_dir.is_dir():
+                continue
+                
             try:
-                # Extract page number from filename (e.g., page_001.txt -> 1)
-                page_num_str = txt_file.stem.split("_")[1]
+                # Extract page number from directory name (e.g., page_001 -> 1)
+                page_num_str = page_dir.name.split("_")[1]
                 page_num = int(page_num_str)
 
-                content = txt_file.read_text(encoding="utf-8")
-                pages[page_num] = content
+                # Read result.mmd file
+                result_file = page_dir / "result.mmd"
+                if result_file.exists():
+                    content = result_file.read_text(encoding="utf-8")
+                    pages[page_num] = content
+                else:
+                    print(f"Warning: No result.mmd found in {page_dir}")
 
             except (IndexError, ValueError) as e:
-                print(f"Warning: Could not parse page number from {txt_file}: {e}")
+                print(f"Warning: Could not parse page number from {page_dir}: {e}")
 
         if not pages:
-            raise ValueError(f"No valid page files found in {directory}")
+            raise ValueError(f"No valid page directories found in {directory}")
 
         return cls(pages)
 
@@ -173,6 +181,38 @@ class PageManager:
     def get_current_page_number(self) -> int:
         """Get current page number."""
         return self.current_page
+
+    def get_page_info(self, page_num: Optional[int] = None) -> Dict[str, any]:
+        """Get complete information about a page.
+
+        Args:
+            page_num: Page number (uses current page if None)
+
+        Returns:
+            Dictionary with page information including number, content, total pages
+        """
+        target_page = page_num if page_num is not None else self.current_page
+        
+        if target_page not in self.pages:
+            return {
+                "page_number": target_page,
+                "content": None,
+                "error": "Page not found",
+            }
+        
+        # Get page index for navigation info
+        page_idx = self.page_numbers.index(target_page)
+        
+        return {
+            "page_number": target_page,
+            "page_index": page_idx,
+            "total_pages": len(self.pages),
+            "content": self.pages[target_page],
+            "has_previous": page_idx > 0,
+            "has_next": page_idx < len(self.pages) - 1,
+            "previous_page_number": self.page_numbers[page_idx - 1] if page_idx > 0 else None,
+            "next_page_number": self.page_numbers[page_idx + 1] if page_idx < len(self.pages) - 1 else None,
+        }
 
     def next_page(self, steps: int = 1) -> Optional[str]:
         """Move to next page(s).

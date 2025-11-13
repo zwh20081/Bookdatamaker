@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bookdatamaker"
-version = "0.2.1"
+version = "0.2.2"
 description = "CLI tool for extracting text with DeepSeek OCR and generating datasets"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "MIT"}
 authors = [
-    {name = "Book Data Maker", email = "contact@example.com"}
+    {name = "zwh20081", email = "zwh20081@solart.pro"}
 ]
 dependencies = [
     "click",

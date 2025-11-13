@@ -134,18 +134,12 @@ async def _extract_async(
                     status.print_info(f"Processing document: {input_path.suffix.upper()}")
 
                     results = await extractor.extract_from_document(
-                        input_path, prefer_text=False
+                        input_path, prefer_text=False, output_dir=output_dir
                     )
 
                     if not results:
                         status.print_warning("No pages extracted")
                         return
-
-                    # Save by page number (with progress bar)
-                    from tqdm import tqdm
-                    for page_num, text in tqdm(results, desc="Saving pages", unit="page"):
-                        output_file = output_dir / f"page_{page_num:03d}.txt"
-                        output_file.write_text(text, encoding="utf-8")
 
                     status.print_success(
                         f"Extracted {len(results)} pages to: {output_dir}"
@@ -201,7 +195,7 @@ async def _extract_async(
 
 
 @cli.command()
-@click.argument("text_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("extracted_dir", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--db",
     "-d",
@@ -264,7 +258,7 @@ async def _extract_async(
     help="Additional custom instructions to append to system prompt",
 )
 def generate(
-    text_file: Path,
+    extracted_dir: Path,
     db: Path,
     mode: str,
     distribution: str,
@@ -279,7 +273,7 @@ def generate(
 ) -> None:
     """Generate dataset using parallel LLM threads with MCP navigation.
 
-    TEXT_FILE: Path to combined text file (from extract command)
+    EXTRACTED_DIR: Path to directory containing page_XXX/ subdirectories (from extract command)
     
     This command starts multiple LLM threads at different positions in the document.
     Each thread navigates the document using MCP tools and generates Q&A pairs.
@@ -302,7 +296,7 @@ def generate(
 
     asyncio.run(
         _generate_async(
-            text_file,
+            extracted_dir,
             db,
             mode,
             distribution,
@@ -319,7 +313,7 @@ def generate(
 
 
 async def _generate_async(
-    text_file: Path,
+    extracted_dir: Path,
     db: Path,
     mode: str,
     distribution: str,
@@ -335,10 +329,10 @@ async def _generate_async(
     """Async implementation of parallel dataset generation."""
     from bookdatamaker.llm.parallel_generator import ParallelDatasetGenerator
 
-    click.echo(f"Loading text from: {text_file}")
+    click.echo(f"Loading pages from directory: {extracted_dir}")
     
-    # Load pages
-    page_manager = PageManager.from_combined_file(text_file)
+    # Load pages from directory
+    page_manager = PageManager.from_directory(extracted_dir)
     total_paragraphs = page_manager.total_paragraphs
     total_pages = page_manager.get_total_pages()
     
@@ -346,7 +340,7 @@ async def _generate_async(
 
     # Initialize parallel generator
     generator = ParallelDatasetGenerator(
-        text_file=text_file,
+        page_manager=page_manager,
         db_path=db,
         mode=mode,
         distribution=distribution,
@@ -376,7 +370,7 @@ async def _generate_async(
 
 
 @cli.command()
-@click.argument("text_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("extracted_dir", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--db",
     "-d",
@@ -384,48 +378,40 @@ async def _generate_async(
     default="dataset.db",
     help="SQLite database file for dataset storage",
 )
-def mcp_server(text_file: Path, db: Path) -> None:
-    """Start MCP server with line/column navigation support.
+def mcp_server(extracted_dir: Path, db: Path) -> None:
+    """Start MCP server with page navigation support.
 
-    TEXT_FILE: Path to text file (combined.txt with page markers or paragraphs)
+    EXTRACTED_DIR: Path to directory containing page_XXX/ subdirectories (from extract command)
     
-    The MCP server allows LLMs to navigate the document and submit Q&A pairs
+    The MCP server allows LLMs to navigate the document by pages and submit Q&A pairs
     to build a dataset. All navigation methods return unified responses with
-    line_number, paragraph_number, page_number, and content.
+    page_number and content.
     
     Dataset submissions are stored in SQLite database. Use 'export-dataset'
     command to export the data after the server stops.
     """
     from bookdatamaker.mcp import create_mcp_server
 
-    click.echo(f"Loading document from: {text_file}")
+    click.echo(f"Loading document from: {extracted_dir}")
     click.echo(f"Dataset database: {db}")
 
-    # Try to load with PageManager for advanced navigation
+    # Load with PageManager from directory
     try:
-        page_manager = PageManager.from_combined_file(text_file)
+        page_manager = PageManager.from_directory(extracted_dir)
         stats = page_manager.get_statistics()
         
         click.echo(f"✓ Loaded {stats['total_pages']} pages")
         click.echo(f"✓ Total lines: {stats['total_lines']}")
         click.echo(f"✓ Total paragraphs: {stats['total_paragraphs']}")
         click.echo(f"✓ Total characters: {stats['total_characters']}")
-        click.echo("\nStarting MCP server with line/column navigation support...")
+        click.echo("\nStarting MCP server with page navigation support...")
         click.echo("Use Ctrl+C to stop the server\n")
         
         asyncio.run(_run_mcp_server(page_manager=page_manager, db_path=str(db)))
 
     except Exception as e:
-        # Fallback: simple paragraph mode
-        click.echo(f"⚠ Could not load as page-based document: {e}")
-        click.echo("Falling back to paragraph mode...")
-        
-        text = text_file.read_text(encoding="utf-8")
-        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-        
-        click.echo(f"Starting MCP server with {len(paragraphs)} paragraphs...")
-        click.echo("Use Ctrl+C to stop the server\n")
-        asyncio.run(_run_mcp_server(paragraphs=paragraphs, db_path=str(db)))
+        click.echo(f"✗ Failed to load document: {e}")
+        raise click.Abort()
 
 
 async def _run_mcp_server(
@@ -535,7 +521,7 @@ def export_dataset(
 
 
 @cli.command()
-@click.argument("text_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("extracted_dir", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--db",
     "-d",
@@ -561,7 +547,7 @@ def export_dataset(
     help="Model name (optional, uses server default if not specified)",
 )
 def chat(
-    text_file: Path,
+    extracted_dir: Path,
     db: Path,
     openai_api_key: Optional[str],
     openai_api_url: str,
@@ -569,11 +555,11 @@ def chat(
 ) -> None:
     """Interactive chat with document using MCP tools.
     
-    Chat with an LLM that can access the document through MCP navigation tools.
+    Chat with an LLM that can access the document through page navigation tools.
     Useful for exploring documents and testing Q&A generation interactively.
     
     Example:
-        bookdatamaker chat combined.txt --model gpt-4
+        bookdatamaker chat ./extracted --model gpt-4
     """
     from bookdatamaker.utils.status import StatusIndicator
     
@@ -586,7 +572,7 @@ def chat(
     
     try:
         asyncio.run(_chat_async(
-            text_file=text_file,
+            extracted_dir=extracted_dir,
             db_path=db,
             openai_api_key=openai_api_key,
             openai_api_url=openai_api_url,
@@ -600,7 +586,7 @@ def chat(
 
 
 async def _chat_async(
-    text_file: Path,
+    extracted_dir: Path,
     db_path: Path,
     openai_api_key: str,
     openai_api_url: str,
@@ -615,8 +601,8 @@ async def _chat_async(
     
     console = Console()
     
-    # Load document
-    page_manager = PageManager.from_combined_file(text_file)
+    # Load document from directory
+    page_manager = PageManager.from_directory(extracted_dir)
     dataset_manager = DatasetManager(str(db_path))
     
     # Initialize OpenAI client
@@ -627,7 +613,7 @@ async def _chat_async(
     
     # Create a dummy generator instance to get tool definitions
     dummy_gen = ParallelDatasetGenerator(
-        text_file=text_file,
+        page_manager=page_manager,
         db_path=db_path,
         mode="api",
         distribution="100",
@@ -639,15 +625,18 @@ async def _chat_async(
     tools = dummy_gen._get_mcp_tools()
     
     # System prompt
+    total_pages = page_manager.get_total_pages()
     system_prompt = f"""You are a helpful assistant with access to document navigation tools.
 
-Document: {text_file.name}
-Total paragraphs: {page_manager.total_paragraphs}
+Document: {extracted_dir.name}
+Total pages: {total_pages}
 
 Available tools:
-- get_paragraph: Retrieve a specific paragraph by number
-- move_forward: Move forward by N paragraphs
-- move_backward: Move backward by N paragraphs
+- get_current_page: Get the current page content
+- next_page: Move to next page(s)
+- previous_page: Move to previous page(s)
+- jump_to_page: Jump to a specific page number
+- get_page_context: Get current page with surrounding pages
 - submit_dataset: Submit a question-answer pair to the database (optional)
 - exit: End the conversation
 
@@ -660,8 +649,8 @@ Use the tools to access document content when needed."""
     # Display welcome message
     console.print(Panel(
         f"[bold cyan]Interactive Document Chat[/bold cyan]\n\n"
-        f"📚 Document: {text_file.name}\n"
-        f"📊 Paragraphs: {page_manager.total_paragraphs}\n"
+        f"📚 Document: {extracted_dir.name}\n"
+        f"📊 Pages: {total_pages}\n"
         f"🤖 Model: {model}\n"
         f"💾 Database: {db_path}\n\n"
         f"[dim]Type your questions or commands. The AI can use tools to explore the document.\n"
@@ -731,32 +720,57 @@ Use the tools to access document content when needed."""
                         console.print("\n[yellow]Assistant requested to exit. Goodbye![/yellow]")
                         return
                         
-                    elif function_name == "get_paragraph":
-                        para_num = function_args["paragraph_number"]
-                        result = page_manager.get_paragraph_info(para_num)
-                        if result:
-                            current_position = para_num
-                            tool_result = f"Paragraph {para_num}:\n{result['content']}"
+                    elif function_name == "get_current_page":
+                        result = page_manager.get_page_info()
+                        if result and "error" not in result:
+                            current_position = result["page_number"]
+                            tool_result = f"Page {result['page_number']} (of {result['total_pages']}):\n{result['content']}"
                         else:
-                            tool_result = f"Error: Paragraph {para_num} not found"
+                            tool_result = f"Error: Could not get current page"
                         
-                    elif function_name == "move_forward":
-                        steps = function_args.get("steps", 1)
-                        current_position = min(current_position + steps, page_manager.total_paragraphs - 1)
-                        result = page_manager.get_paragraph_info(current_position)
-                        if result:
-                            tool_result = f"Moved to paragraph {current_position}:\n{result['content']}"
+                    elif function_name == "jump_to_page":
+                        page_num = function_args["page_number"]
+                        content = page_manager.jump_to_page(page_num)
+                        if content is not None:
+                            current_position = page_num
+                            result = page_manager.get_page_info()
+                            tool_result = f"Page {page_num} (of {result['total_pages']}):\n{content}"
                         else:
-                            tool_result = f"Error: Paragraph {current_position} not found"
+                            tool_result = f"Error: Page {page_num} not found"
                         
-                    elif function_name == "move_backward":
+                    elif function_name == "next_page":
                         steps = function_args.get("steps", 1)
-                        current_position = max(current_position - steps, 0)
-                        result = page_manager.get_paragraph_info(current_position)
-                        if result:
-                            tool_result = f"Moved to paragraph {current_position}:\n{result['content']}"
+                        content = page_manager.next_page(steps)
+                        result = page_manager.get_page_info()
+                        if content is not None:
+                            current_position = result["page_number"]
+                            tool_result = f"Moved to page {result['page_number']} (of {result['total_pages']}):\n{content}"
                         else:
-                            tool_result = f"Error: Paragraph {current_position} not found"
+                            tool_result = f"Error: Could not move to next page"
+                        
+                    elif function_name == "previous_page":
+                        steps = function_args.get("steps", 1)
+                        content = page_manager.previous_page(steps)
+                        result = page_manager.get_page_info()
+                        if content is not None:
+                            current_position = result["page_number"]
+                            tool_result = f"Moved to page {result['page_number']} (of {result['total_pages']}):\n{content}"
+                        else:
+                            tool_result = f"Error: Could not move to previous page"
+                    
+                    elif function_name == "get_page_context":
+                        before = function_args.get("before", 1)
+                        after = function_args.get("after", 1)
+                        current_page = page_manager.get_current_page_number()
+                        context = page_manager.get_context(current_page, before, after)
+                        if context:
+                            tool_result = f"Page {current_page} with context:\nCurrent:\n{context['content']}\n"
+                            if context.get('previous_pages'):
+                                tool_result += f"\nPrevious pages: {list(context['previous_pages'].keys())}"
+                            if context.get('next_pages'):
+                                tool_result += f"\nNext pages: {list(context['next_pages'].keys())}"
+                        else:
+                            tool_result = f"Error: Could not get page context"
                         
                     else:
                         tool_result = f"Error: Unknown tool {function_name}"

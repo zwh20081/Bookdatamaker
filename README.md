@@ -56,7 +56,7 @@ pip install -r requirements.txt && pip install -e .
 
 # 2. Extract → Generate → Export
 bookdatamaker extract book.pdf -o ./extracted
-bookdatamaker generate ./extracted/combined.txt -d dataset.db --distribution "10,10,20,30,20,10"
+bookdatamaker generate ./extracted -d dataset.db --distribution "10,10,20,30,20,10"
 bookdatamaker export-dataset dataset.db -o output.parquet
 ```
 
@@ -70,7 +70,7 @@ pip install -r requirements.txt && pip install -e ".[local]"
 bookdatamaker extract book.pdf --mode local --batch-size 8 -o ./extracted
 
 # 3. Generate with vLLM
-bookdatamaker generate ./extracted/combined.txt \
+bookdatamaker generate ./extracted \
   --mode vllm \
   --vllm-model-path meta-llama/Llama-3-8B-Instruct \
   --distribution "25,25,25,25" \
@@ -173,27 +173,42 @@ bookdatamaker extract ./images/ --mode local -o ./extracted
 
 ```
 ./extracted/
-├── page_001.txt
-├── page_002.txt
-├── ...
-└── combined.txt    # All pages with [PAGE_XXX] markers
+├── page_001/
+│   ├── page_001.png      # Page image
+│   └── result.mmd        # Extracted text in markdown
+├── page_002/
+│   ├── page_002.png
+│   └── result.mmd
+└── ...
 ```
+
+**Note**: Each page is stored in its own subdirectory with the extracted text in `result.mmd` format.
 
 ---
 
 ## Generate Dataset (Stage 2)
 
-Generate Q&A datasets using parallel LLM threads.
+Generate Q&A datasets using parallel LLM threads with **page-based navigation**.
+
+### Navigation Model
+
+The system now uses **page navigation** instead of paragraph navigation:
+- LLM threads navigate through document pages
+- Tools available: `get_current_page`, `next_page`, `previous_page`, `jump_to_page`, `get_page_context`
+- Each thread starts at a specific page based on distribution
+- Threads can move forward/backward through pages to explore content
 
 ### Basic Usage
 
 ```bash
 # 6 threads (from distribution), 20 Q&A pairs per thread
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   -d dataset.db \
   --distribution "10,10,20,30,20,10" \
   --datasets-per-thread 20
 ```
+
+**Note**: The `generate` command now accepts the extracted directory (containing page_XXX/ subdirectories) instead of a combined text file.
 
 **Key Concept**: Thread count is determined by the number of comma-separated values in `--distribution`.
 
@@ -201,14 +216,14 @@ bookdatamaker generate combined.txt \
 
 ```bash
 # OpenAI/Azure
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   -d dataset.db \
   --openai-api-url https://api.openai.com/v1 \
   --model gpt-4 \
   --distribution "10,10,20,30,20,10"
 
 # Custom API endpoint
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --openai-api-url http://localhost:8000/v1 \
   --model your-model-name \
   --distribution "25,25,25,25"
@@ -220,14 +235,14 @@ Use vLLM directly without API server:
 
 ```bash
 # Single GPU
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --mode vllm \
   --vllm-model-path meta-llama/Llama-3-8B-Instruct \
   --distribution "25,25,25,25" \
   -d dataset.db
 
 # Multi-GPU (4 GPUs, 6 threads)
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --mode vllm \
   --vllm-model-path meta-llama/Llama-3-70B-Instruct \
   --tensor-parallel-size 4 \
@@ -248,15 +263,15 @@ Add specific instructions to guide LLM behavior:
 
 ```bash
 # Language specification
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --custom-prompt "Generate all Q&A in Chinese with simplified characters"
 
 # Format specification
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --custom-prompt "Questions should be multiple-choice with 4 options"
 
 # Multiple requirements
-bookdatamaker generate combined.txt \
+bookdatamaker generate ./extracted \
   --custom-prompt "Requirements:
 1. Generate questions in English
 2. Focus on practical applications
@@ -303,15 +318,15 @@ Control where threads start in the document using distribution percentages.
 ### How It Works
 
 ```
-Document: 500 paragraphs
+Document: 100 pages
 Distribution: "10,10,20,30,20,10" (6 threads)
 
-Thread 0: Start at 0%   → Paragraph 1
-Thread 1: Start at 10%  → Paragraph 50
-Thread 2: Start at 20%  → Paragraph 100
-Thread 3: Start at 50%  → Paragraph 250
-Thread 4: Start at 70%  → Paragraph 350
-Thread 5: Start at 80%  → Paragraph 400
+Thread 0: Start at 0%   → Page 1
+Thread 1: Start at 10%  → Page 10
+Thread 2: Start at 20%  → Page 20
+Thread 3: Start at 50%  → Page 50
+Thread 4: Start at 70%  → Page 70
+Thread 5: Start at 80%  → Page 80
 ```
 
 ### Distribution Strategies
@@ -335,9 +350,9 @@ Thread 5: Start at 80%  → Paragraph 400
 
 ### Thread Count Guidelines
 
-- **Small documents** (<100 paragraphs): 2-4 threads
-- **Medium documents** (100-500 paragraphs): 4-8 threads
-- **Large documents** (>500 paragraphs): 8-16 threads
+- **Small documents** (<50 pages): 2-4 threads
+- **Medium documents** (50-200 pages): 4-8 threads
+- **Large documents** (>200 pages): 8-16 threads
 
 ---
 
@@ -408,25 +423,25 @@ Chat with an LLM that can access your document through MCP tools. Perfect for ex
 
 ```bash
 # Basic chat with GPT-4
-bookdatamaker chat combined.txt
+bookdatamaker chat ./extracted
 
 # With vLLM server
-bookdatamaker chat combined.txt \
+bookdatamaker chat ./extracted \
   --openai-api-url http://localhost:8000/v1 \
   --model Qwen/Qwen3-4B-Thinking-2507
 
 # With custom database
-bookdatamaker chat combined.txt --db my_dataset.db
+bookdatamaker chat ./extracted --db my_dataset.db
 ```
 
 ### Example Interaction
 
 ```
-📚 Document: combined.txt
-📊 Paragraphs: 578
+📚 Document: ./extracted
+📊 Pages: 50
 🤖 Model: gpt-4
 
-You: What's in paragraph 100?
+You: What's on page 10?
 - `-f, --format`: Format: `jsonl`, `parquet`, `csv`, `json` (default: `parquet`)
 - `--include-metadata`: Include timestamps
 
@@ -449,7 +464,7 @@ You: What's in paragraph 100?
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `text_file` | required | - | Combined text file |
+| `extracted_dir` | required | - | Directory containing page subdirectories (page_XXX/) |
 | `--db` | optional | `dataset.db` | Database file path |
 | `--mode` | optional | `api` | LLM mode: `api` or `vllm` |
 | `--distribution` | optional | `10,10,20,30,20,10` | Position distribution (determines threads) |
@@ -501,7 +516,7 @@ Set environment variable for verbose logging:
 
 ```bash
 export LOG_LEVEL=DEBUG
-bookdatamaker generate combined.txt -d dataset.db
+bookdatamaker generate ./extracted -d dataset.db
 ```
 
 ---

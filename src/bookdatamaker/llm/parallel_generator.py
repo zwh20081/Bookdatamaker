@@ -24,7 +24,7 @@ class ParallelDatasetGenerator:
 
     def __init__(
         self,
-        text_file: Path,
+        page_manager: PageManager,
         db_path: Path,
         mode: str,
         distribution: str,
@@ -40,7 +40,7 @@ class ParallelDatasetGenerator:
         """Initialize parallel dataset generator.
 
         Args:
-            text_file: Path to combined text file
+            page_manager: PageManager instance with loaded pages
             db_path: Path to SQLite database
             mode: 'api' or 'vllm'
             distribution: Distribution string (e.g., "10,10,20,30,20,10")
@@ -53,7 +53,7 @@ class ParallelDatasetGenerator:
             max_model_len: Maximum model context length (None = model's max)
             custom_prompt: Additional custom instructions for system prompt
         """
-        self.text_file = text_file
+        self.page_manager = page_manager
         self.db_path = db_path
         self.mode = mode
         self.distribution = parse_distribution(distribution)
@@ -125,14 +125,14 @@ class ParallelDatasetGenerator:
             else:
                 tqdm.write(f"[Thread {thread_id}] → {tool_name} executed")
 
-    def calculate_positions(self, total_paragraphs: int) -> List[int]:
+    def calculate_positions(self, total_pages: int) -> List[int]:
         """Calculate starting positions based on distribution.
 
         Args:
-            total_paragraphs: Total number of paragraphs in document
+            total_pages: Total number of pages in document
 
         Returns:
-            List of starting paragraph indices
+            List of starting page numbers
         """
         # Normalize distribution to sum to 100
         total = sum(self.distribution)
@@ -142,40 +142,44 @@ class ParallelDatasetGenerator:
         cumulative = 0.0
         
         for ratio in normalized:
-            position = int(cumulative * total_paragraphs)
-            positions.append(max(1, position))  # Ensure at least paragraph 1
+            position = int(cumulative * total_pages)
+            positions.append(max(1, position))  # Ensure at least page 1
             cumulative += ratio
         
         return positions
 
-    def create_system_prompt(self, start_paragraph: int, thread_id: int) -> str:
+    def create_system_prompt(self, start_page: int, thread_id: int) -> str:
         """Create system prompt for LLM thread.
 
         Args:
-            start_paragraph: Starting paragraph number
+            start_page: Starting page number
             thread_id: Thread identifier
 
         Returns:
             System prompt text
         """
+        total_pages = self.page_manager.get_total_pages()
         base_prompt = f"""You are a helpful assistant with access to the following tools to help generate Q&A pairs from a document.
 
 # Task
-- Starting position: Paragraph {start_paragraph}
+- Starting position: Page {start_page}
+- Total pages: {total_pages}
 - Target: Generate exactly {self.datasets_per_thread} question-answer pairs
 - Thread ID: {thread_id}
 
 # Available Tools
 You have access to the following tools:
-- get_paragraph: Retrieve a specific paragraph by number
-- move_forward: Move forward by N paragraphs from current position
-- move_backward: Move backward by N paragraphs from current position
+- get_current_page: Get the current page content with metadata
+- next_page: Move to the next page(s) and get content
+- previous_page: Move to the previous page(s) and get content
+- jump_to_page: Jump to a specific page by page number
+- get_page_context: Get current page with surrounding pages for context
 - submit_dataset: Submit a question-answer pair to the dataset
 - exit: Exit the session after completing all submissions
 
 # Workflow
-1. Use get_paragraph({start_paragraph}) to start reading from paragraph {start_paragraph}
-2. Use move_forward or move_backward to explore the document
+1. Use jump_to_page({start_page}) to start reading from page {start_page}
+2. Use next_page, previous_page, or get_page_context to explore the document
 3. When you find good content, generate a Q&A pair
 4. Use submit_dataset with input (question) and output (answer) to save it
 5. Repeat until you have submitted {self.datasets_per_thread} pairs
@@ -186,7 +190,7 @@ You have access to the following tools:
 - Answers must be accurate and based on document content
 - Cover diverse topics and difficulty levels
 
-Remember: You MUST use the tools to accomplish this task. Start by calling get_paragraph to read the document."""
+Remember: You MUST use the tools to accomplish this task. Start by calling jump_to_page to read the document."""
         
         # Append custom prompt if provided
         if self.custom_prompt:
@@ -242,31 +246,25 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
             {
                 "type": "function",
                 "function": {
-                    "name": "get_paragraph",
-                    "description": "Get a specific paragraph by number",
+                    "name": "get_current_page",
+                    "description": "Get the current page content with metadata",
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            "paragraph_number": {
-                                "type": "integer",
-                                "description": "Paragraph number to retrieve"
-                            }
-                        },
-                        "required": ["paragraph_number"]
+                        "properties": {}
                     }
                 }
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "move_forward",
-                    "description": "Move forward by N paragraphs",
+                    "name": "next_page",
+                    "description": "Move to the next page(s) and return content",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "steps": {
                                 "type": "integer",
-                                "description": "Number of paragraphs to move forward",
+                                "description": "Number of pages to move forward",
                                 "default": 1
                             }
                         }
@@ -276,14 +274,53 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
             {
                 "type": "function",
                 "function": {
-                    "name": "move_backward",
-                    "description": "Move backward by N paragraphs",
+                    "name": "previous_page",
+                    "description": "Move to the previous page(s) and return content",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "steps": {
                                 "type": "integer",
-                                "description": "Number of paragraphs to move backward",
+                                "description": "Number of pages to move backward",
+                                "default": 1
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "jump_to_page",
+                    "description": "Jump to a specific page by page number",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "page_number": {
+                                "type": "integer",
+                                "description": "Target page number"
+                            }
+                        },
+                        "required": ["page_number"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_page_context",
+                    "description": "Get current page with surrounding pages for context",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "before": {
+                                "type": "integer",
+                                "description": "Number of pages before current",
+                                "default": 1
+                            },
+                            "after": {
+                                "type": "integer",
+                                "description": "Number of pages after current",
                                 "default": 1
                             }
                         }
@@ -326,16 +363,15 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                 print("Error: vLLM not installed. Install with: pip install vllm")
                 raise
         
-        # Load page manager to get total paragraphs
-        page_manager = PageManager.from_combined_file(self.text_file)
-        total_paragraphs = page_manager.total_paragraphs
+        # Get total pages from page manager
+        total_pages = self.page_manager.get_total_pages()
         
         # Calculate starting positions
-        positions = self.calculate_positions(total_paragraphs)
+        positions = self.calculate_positions(total_pages)
         
         # Display initialization info
         console.print("\n" + "="*60)
-        console.print(f"📚 Document: {total_paragraphs} paragraphs")
+        console.print(f"📚 Document: {total_pages} pages")
         console.print(f"🧵 Threads: {self.num_threads}")
         console.print(f"🎯 Target: {self.datasets_per_thread} Q&A pairs per thread ({self.num_threads * self.datasets_per_thread} total)")
         model_display = self.model or "server default" if self.mode == 'api' else self.vllm_model_path
@@ -344,8 +380,8 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
         
         console.print("[bold cyan]Thread Distribution:[/bold cyan]")
         for i, pos in enumerate(positions):
-            percent = (pos / total_paragraphs) * 100
-            console.print(f"  Thread {i}: Start at paragraph [yellow]{pos}[/yellow] ([green]{percent:.1f}%[/green])")
+            percent = (pos / total_pages) * 100
+            console.print(f"  Thread {i}: Start at page [yellow]{pos}[/yellow] ([green]{percent:.1f}%[/green])")
         print()
         
         # Setup progress tracking
@@ -371,7 +407,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                 executor.submit(
                     self._run_thread,
                     thread_id=i,
-                    start_paragraph=pos,
+                    start_page=pos,
                 )
                 for i, pos in enumerate(positions)
             ]
@@ -408,18 +444,18 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
         
         return total_generated
     
-    def _run_thread(self, thread_id: int, start_paragraph: int) -> dict:
+    def _run_thread(self, thread_id: int, start_page: int) -> dict:
         """Run a single generation thread.
 
         Args:
             thread_id: Thread identifier
-            start_paragraph: Starting paragraph number
+            start_page: Starting page number
 
         Returns:
             Result dictionary with statistics
         """
         try:
-            system_prompt = self.create_system_prompt(start_paragraph, thread_id)
+            system_prompt = self.create_system_prompt(start_page, thread_id)
             
             if self.mode == "api":
                 # API mode: use OpenAI client with function calling
@@ -428,14 +464,14 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                     api_key=self.openai_api_key,
                 )
                 
-                # Load page manager for tool execution
-                page_manager = PageManager.from_combined_file(self.text_file)
+                # Initialize dataset manager and set current position
                 dataset_manager = DatasetManager(str(self.db_path))
-                current_position = start_paragraph
+                page_manager = self.page_manager  # Use the page_manager from class instance
+                current_position = start_page
                 
                 messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Please start the task. First, call get_paragraph to read paragraph {start_paragraph}, then begin generating {self.datasets_per_thread} Q&A pairs."}
+                    {"role": "user", "content": f"Please start the task. First, call jump_to_page to navigate to page {start_page}, then begin generating {self.datasets_per_thread} Q&A pairs."}
                 ]
 
                 submitted_count = 0
@@ -510,7 +546,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                                         self._log_tool_result(thread_id, function_name, {"reason": reason, "success": True})
                                         return {
                                             "thread_id": thread_id,
-                                            "start_position": start_paragraph,
+                                            "start_position": start_page,
                                             "submitted": submitted_count,
                                             "status": "completed",
                                             "iterations": iteration + 1,
@@ -522,36 +558,67 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                                         tool_result = f"Exit rejected! You've only submitted {submitted_count}/{self.datasets_per_thread} Q&A pairs. You need {remaining} more pairs before you can exit. Continue generating."
                                         self._log_tool_result(thread_id, function_name, {"rejected": True, "remaining": remaining})
                                     
-                                elif function_name == "get_paragraph":
-                                    para_num = function_args["paragraph_number"]
-                                    result = page_manager.get_paragraph_info(para_num)
-                                    if result:
-                                        current_position = para_num
-                                        tool_result = f"Paragraph {para_num}:\n{result['content']}"
-                                        self._log_tool_result(thread_id, function_name, {"paragraph": para_num})
+                                elif function_name == "get_current_page":
+                                    result = page_manager.get_page_info()
+                                    if result and "error" not in result:
+                                        current_position = result["page_number"]
+                                        tool_result = f"Page {result['page_number']} (of {result['total_pages']}):\n{result['content']}"
+                                        self._log_tool_result(thread_id, function_name, {"page": result['page_number']})
                                     else:
-                                        tool_result = f"Error: Paragraph {para_num} not found"
-                                        self._log_tool_result(thread_id, function_name, {"error": f"Paragraph {para_num} not found"})
+                                        tool_result = f"Error: Could not get current page"
+                                        self._log_tool_result(thread_id, function_name, {"error": "Could not get current page"})
                                     
-                                elif function_name == "move_forward":
-                                    steps = function_args.get("steps", 1)
-                                    current_position = min(current_position + steps, page_manager.total_paragraphs - 1)
-                                    result = page_manager.get_paragraph_info(current_position)
-                                    if result:
-                                        tool_result = f"Moved to paragraph {current_position}:\n{result['content']}"
-                                        self._log_tool_result(thread_id, function_name, {"to": current_position, "steps": steps})
+                                elif function_name == "jump_to_page":
+                                    page_num = function_args["page_number"]
+                                    content = page_manager.jump_to_page(page_num)
+                                    if content is not None:
+                                        current_position = page_num
+                                        result = page_manager.get_page_info()
+                                        tool_result = f"Page {page_num} (of {result['total_pages']}):\n{content}"
+                                        self._log_tool_result(thread_id, function_name, {"page": page_num})
                                     else:
-                                        tool_result = f"Error: Paragraph {current_position} not found"
+                                        tool_result = f"Error: Page {page_num} not found"
+                                        self._log_tool_result(thread_id, function_name, {"error": f"Page {page_num} not found"})
                                     
-                                elif function_name == "move_backward":
+                                elif function_name == "next_page":
                                     steps = function_args.get("steps", 1)
-                                    current_position = max(current_position - steps, 0)
-                                    result = page_manager.get_paragraph_info(current_position)
-                                    if result:
-                                        tool_result = f"Moved to paragraph {current_position}:\n{result['content']}"
-                                        self._log_tool_result(thread_id, function_name, {"to": current_position, "steps": steps})
+                                    content = page_manager.next_page(steps)
+                                    result = page_manager.get_page_info()
+                                    if content is not None:
+                                        current_position = result["page_number"]
+                                        tool_result = f"Moved to page {result['page_number']} (of {result['total_pages']}):\n{content}"
+                                        self._log_tool_result(thread_id, function_name, {"to": result['page_number'], "steps": steps})
                                     else:
-                                        tool_result = f"Error: Paragraph {current_position} not found"
+                                        tool_result = f"Error: Could not move to next page"
+                                        self._log_tool_result(thread_id, function_name, {"error": "Could not move forward"})
+                                    
+                                elif function_name == "previous_page":
+                                    steps = function_args.get("steps", 1)
+                                    content = page_manager.previous_page(steps)
+                                    result = page_manager.get_page_info()
+                                    if content is not None:
+                                        current_position = result["page_number"]
+                                        tool_result = f"Moved to page {result['page_number']} (of {result['total_pages']}):\n{content}"
+                                        self._log_tool_result(thread_id, function_name, {"to": result['page_number'], "steps": steps})
+                                    else:
+                                        tool_result = f"Error: Could not move to previous page"
+                                        self._log_tool_result(thread_id, function_name, {"error": "Could not move backward"})
+                                
+                                elif function_name == "get_page_context":
+                                    before = function_args.get("before", 1)
+                                    after = function_args.get("after", 1)
+                                    current_page = page_manager.get_current_page_number()
+                                    context = page_manager.get_context(current_page, before, after)
+                                    if context:
+                                        tool_result = f"Page {current_page} with context:\nCurrent:\n{context['content']}\n"
+                                        if context.get('previous_pages'):
+                                            tool_result += f"\nPrevious pages: {list(context['previous_pages'].keys())}"
+                                        if context.get('next_pages'):
+                                            tool_result += f"\nNext pages: {list(context['next_pages'].keys())}"
+                                        self._log_tool_result(thread_id, function_name, {"page": current_page, "before": before, "after": after})
+                                    else:
+                                        tool_result = f"Error: Could not get page context"
+                                        self._log_tool_result(thread_id, function_name, {"error": "Could not get context"})
                                     
                                 else:
                                     tool_result = f"Error: Unknown tool {function_name}"
@@ -595,7 +662,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                 # Max iterations reached
                 return {
                     "thread_id": thread_id,
-                    "start_position": start_paragraph,
+                    "start_position": start_page,
                     "submitted": submitted_count,
                     "status": "incomplete - max iterations",
                     "iterations": max_iterations,
@@ -606,7 +673,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                 # Note: vLLM.generate() is synchronous and thread-safe
                 # Multiple threads can call it simultaneously, vLLM handles batching
                 prompts = [
-                    f"{system_prompt}\n\nBegin at paragraph {start_paragraph}. Use navigation tools to explore and generate {self.datasets_per_thread} Q&A pairs."
+                    f"{system_prompt}\n\nBegin at page {start_page}. Use navigation tools to explore and generate {self.datasets_per_thread} Q&A pairs."
                 ]
                 
                 submitted_count = 0
@@ -627,7 +694,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                         if "exit" in content.lower() or submitted_count >= self.datasets_per_thread:
                             return {
                                 "thread_id": thread_id,
-                                "start_position": start_paragraph,
+                                "start_position": start_page,
                                 "submitted": submitted_count,
                                 "status": "completed",
                                 "iterations": iteration + 1,
@@ -643,7 +710,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
                 # Max iterations reached
                 return {
                     "thread_id": thread_id,
-                    "start_position": start_paragraph,
+                    "start_position": start_page,
                     "submitted": submitted_count,
                     "status": "incomplete",
                     "iterations": max_iterations,
@@ -652,7 +719,7 @@ Remember: You MUST use the tools to accomplish this task. Start by calling get_p
         except Exception as e:
             return {
                 "thread_id": thread_id,
-                "start_position": start_paragraph,
+                "start_position": start_page,
                 "submitted": 0,
                 "status": "error",
                 "error": str(e),

@@ -319,12 +319,14 @@ class OCRExtractor:
 
         return all_results
     
-    def _run_single_inference(self, image: Image.Image, prompt: str) -> str:
+    def _run_single_inference(self, image: Image.Image, prompt: str, page_num: int = None, output_dir: Path = None) -> str:
         """Run model inference on single image (synchronous helper).
         
         Args:
             image: PIL Image
             prompt: Prompt text
+            page_num: Page number (for filename)
+            output_dir: Directory to save result (if None, use temp dir)
             
         Returns:
             Extracted text
@@ -334,51 +336,61 @@ class OCRExtractor:
         import io
         from tqdm import tqdm
         
-        # DeepSeek-OCR uses infer() method which needs file path
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
+        # Determine output directory
+        if output_dir is None:
+            use_temp = True
+            tmpdir_obj = tempfile.TemporaryDirectory()
+            base_dir = Path(tmpdir_obj.name)
+        else:
+            use_temp = False
+            base_dir = output_dir
+        
+        try:
+            # Create subdirectory for this page
+            img_name = f"page_{page_num:03d}" if page_num else "temp"
+            page_dir = base_dir / img_name
+            page_dir.mkdir(parents=True, exist_ok=True)
             
-            # Save image temporarily
-            img_path = tmp_path / "temp.png"
+            # Save image in the page subdirectory
+            img_path = page_dir / f"{img_name}.png"
             image.save(img_path)
             
-            # Capture model output to avoid interfering with tqdm
+            # Suppress model output to avoid interfering with tqdm
             old_stdout = sys.stdout
             old_stderr = sys.stderr
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            sys.stdout = stdout_capture
-            sys.stderr = stderr_capture
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
             
             try:
                 # Call model.infer() - DeepSeek-OCR's API
-                # Gundam mode: base_size=1024, image_size=640, crop_mode=True
-                result = self.model.infer(
+                # Model will save result to page_dir/result.mmd
+                self.model.infer(
                     self.tokenizer,
                     prompt=prompt,
                     image_file=str(img_path),
-                    output_path=str(tmp_path),
+                    output_path=str(page_dir),
                     base_size=1024,
                     image_size=640,
                     crop_mode=True,
                     test_compress=False,
-                    save_results=False
+                    save_results=True
                 )
             finally:
                 # Restore stdout/stderr
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
-                
-                # Output captured content via tqdm.write to preserve progress bar
-                stdout_content = stdout_capture.getvalue()
-                stderr_content = stderr_capture.getvalue()
-                
-                if stdout_content.strip():
-                    tqdm.write(stdout_content.rstrip())
-                if stderr_content.strip():
-                    tqdm.write(stderr_content.rstrip())
-        
-        return result
+            
+            # Read result from output file (result.mmd)
+            output_file = page_dir / "result.mmd"
+            if output_file.exists():
+                text = output_file.read_text(encoding="utf-8")
+                return text
+            else:
+                tqdm.write(f"Warning: Output file not found at {output_file}")
+                return ""
+        finally:
+            if use_temp:
+                tmpdir_obj.cleanup()
 
     def split_into_paragraphs(self, text: str) -> List[str]:
         """Split text into paragraphs.
@@ -399,13 +411,14 @@ class OCRExtractor:
         return paragraphs
 
     async def extract_from_document(
-        self, document_path: Path, prefer_text: bool = False
+        self, document_path: Path, prefer_text: bool = False, output_dir: Path = None
     ) -> List[tuple[int, str]]:
         """Extract text from PDF or EPUB document.
 
         Args:
             document_path: Path to PDF or EPUB file
             prefer_text: Try to extract text directly before OCR
+            output_dir: Directory to save OCR results directly (optional)
 
         Returns:
             List of tuples (page_number, extracted_text)
@@ -430,7 +443,7 @@ class OCRExtractor:
         if image_pages:
             if self.mode == "local":
                 # Batch process all images with transformers
-                image_results = await self._extract_batch_from_images(image_pages)
+                image_results = await self._extract_batch_from_images(image_pages, output_dir)
             else:
                 # API mode - process sequentially
                 image_results = []
@@ -455,12 +468,13 @@ class OCRExtractor:
         return text_results
     
     async def _extract_batch_from_images(
-        self, image_pages: List[tuple[int, Image.Image]]
+        self, image_pages: List[tuple[int, Image.Image]], output_dir: Path = None
     ) -> List[tuple[int, str]]:
         """Batch extract text from images using local transformers model.
 
         Args:
             image_pages: List of tuples (page_number, image)
+            output_dir: Directory to save OCR results (optional, for direct save)
 
         Returns:
             List of tuples (page_number, extracted_text)
@@ -476,7 +490,9 @@ class OCRExtractor:
         prompt = "<image>\n<|grounding|>Convert the document to markdown. "
         
         # Process in batches with progress bar
-        with tqdm(total=total_pages, desc="OCR Processing", unit="page", dynamic_ncols=True) as pbar:
+        # ncols=80 fixed width, mininterval=0.5 update every 0.5s minimum
+        with tqdm(total=total_pages, desc="OCR Processing", unit="page", 
+                  ncols=100, mininterval=0.5) as pbar:
             for i in range(0, total_pages, self.batch_size):
                 batch = image_pages[i:i + self.batch_size]
                 
@@ -490,7 +506,8 @@ class OCRExtractor:
                         # Run inference in thread pool
                         output_text = await loop.run_in_executor(
                             executor, 
-                            lambda img=rgb_image: self._run_single_inference(img, prompt)
+                            lambda img=rgb_image, pn=page_num, od=output_dir: 
+                                self._run_single_inference(img, prompt, pn, od)
                         )
                         
                         # Collect result

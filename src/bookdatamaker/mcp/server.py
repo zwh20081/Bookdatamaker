@@ -263,9 +263,78 @@ class MCPServer:
                 ),
             ]
 
-            # Add line/column navigation tools if page_manager is available
+            # Add page-based navigation tools if page_manager is available
             if self.page_manager:
                 tools.extend([
+                    Tool(
+                        name="get_current_page",
+                        description="Get the current page content with metadata (page number, total pages, etc.)",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {},
+                        },
+                    ),
+                    Tool(
+                        name="next_page",
+                        description="Move to the next page(s) and return the new page content",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "steps": {
+                                    "type": "integer",
+                                    "description": "Number of pages to move forward",
+                                    "default": 1,
+                                }
+                            },
+                        },
+                    ),
+                    Tool(
+                        name="previous_page",
+                        description="Move to the previous page(s) and return the new page content",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "steps": {
+                                    "type": "integer",
+                                    "description": "Number of pages to move backward",
+                                    "default": 1,
+                                }
+                            },
+                        },
+                    ),
+                    Tool(
+                        name="jump_to_page",
+                        description="Jump to a specific page by page number",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "page_number": {
+                                    "type": "integer",
+                                    "description": "Target page number",
+                                }
+                            },
+                            "required": ["page_number"],
+                        },
+                    ),
+                    Tool(
+                        name="get_page_context",
+                        description="Get current page with surrounding pages for context",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "before": {
+                                    "type": "integer",
+                                    "description": "Number of pages before current",
+                                    "default": 1,
+                                },
+                                "after": {
+                                    "type": "integer",
+                                    "description": "Number of pages after current",
+                                    "default": 1,
+                                },
+                            },
+                        },
+                    ),
                     Tool(
                         name="get_document_stats",
                         description="Get document statistics (total lines, pages, etc.)",
@@ -555,6 +624,38 @@ class MCPServer:
                 self.should_exit = True
                 
                 return [TextContent(type="text", text=str(response))]
+
+            # Page-based navigation tools
+            elif name == "get_current_page" and self.page_manager:
+                page_info = self.page_manager.get_page_info()
+                return [TextContent(type="text", text=str(page_info))]
+
+            elif name == "next_page" and self.page_manager:
+                steps = arguments.get("steps", 1)
+                self.page_manager.next_page(steps)
+                page_info = self.page_manager.get_page_info()
+                return [TextContent(type="text", text=str(page_info))]
+
+            elif name == "previous_page" and self.page_manager:
+                steps = arguments.get("steps", 1)
+                self.page_manager.previous_page(steps)
+                page_info = self.page_manager.get_page_info()
+                return [TextContent(type="text", text=str(page_info))]
+
+            elif name == "jump_to_page" and self.page_manager:
+                page_number = arguments["page_number"]
+                content = self.page_manager.jump_to_page(page_number)
+                if content is None:
+                    return [TextContent(type="text", text=f"Page {page_number} not found")]
+                page_info = self.page_manager.get_page_info()
+                return [TextContent(type="text", text=str(page_info))]
+
+            elif name == "get_page_context" and self.page_manager:
+                before = arguments.get("before", 1)
+                after = arguments.get("after", 1)
+                current_page = self.page_manager.get_current_page_number()
+                context = self.page_manager.get_context(current_page, before, after)
+                return [TextContent(type="text", text=str(context))]
 
             # Line/column navigation tools
             elif name == "get_document_stats" and self.page_manager:
