@@ -345,6 +345,29 @@ bookdatamaker generate ./extracted \
 5. Difficulty: intermediate"
 ```
 
+### Message History Management
+
+Control conversation history to prevent token overflow:
+
+```bash
+# Limit conversation to 50 messages (keeps system prompt + last 10 when exceeded)
+bookdatamaker generate ./extracted \
+  --max-messages 50 \
+  -d dataset.db
+
+# For models with limited context windows
+bookdatamaker generate ./extracted \
+  --max-messages 30 \
+  --model gpt-3.5-turbo
+```
+
+**How it works:**
+- When message count exceeds `--max-messages`, history is pruned automatically
+- System prompt is always preserved
+- Last 10 messages are kept for continuity
+- Prevents token overflow errors during long generation sessions
+- Useful for models with limited context windows (e.g., 4K, 8K tokens)
+
 ---
 
 ## Export Dataset

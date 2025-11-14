@@ -295,6 +295,12 @@ async def _extract_async(
     type=str,
     help="Tool call parser name for vLLM mode (required when using vllm mode). Example: 'hermes', 'mistral'",
 )
+@click.option(
+    "--max-messages",
+    type=int,
+    default=None,
+    help="Maximum message history to keep (only last N messages). When limit reached, keeps system prompt + last 10 messages. Helps prevent token overflow.",
+)
 def generate(
     extracted_dir: Path,
     db: Path,
@@ -309,6 +315,7 @@ def generate(
     max_model_len: Optional[int],
     custom_prompt: Optional[str],
     tool_call_parser: Optional[str],
+    max_messages: Optional[int],
 ) -> None:
     """Generate dataset using parallel LLM threads with MCP navigation.
 
@@ -352,6 +359,7 @@ def generate(
             max_model_len,
             custom_prompt,
             tool_call_parser,
+            max_messages,
         )
     )
 
@@ -370,6 +378,7 @@ async def _generate_async(
     max_model_len: Optional[int],
     custom_prompt: Optional[str],
     tool_call_parser: Optional[str],
+    max_messages: Optional[int],
 ) -> None:
     """Async implementation of parallel dataset generation."""
     from bookdatamaker.llm.parallel_generator import ParallelDatasetGenerator
@@ -418,6 +427,7 @@ async def _generate_async(
         max_model_len=max_model_len,
         custom_prompt=custom_prompt,
         tool_call_parser=tool_call_parser,
+        max_messages=max_messages,
     )
 
     click.echo(f"\nStarting {generator.num_threads} parallel threads")

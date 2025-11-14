@@ -82,6 +82,7 @@ class ParallelDatasetGenerator:
         max_model_len: Optional[int] = None,
         custom_prompt: Optional[str] = None,
         tool_call_parser: Optional[str] = None,
+        max_messages: Optional[int] = None,
     ) -> None:
         """Initialize parallel dataset generator.
 
@@ -99,6 +100,7 @@ class ParallelDatasetGenerator:
             max_model_len: Maximum model context length (None = model's max)
             custom_prompt: Additional custom instructions for system prompt
             tool_call_parser: Tool call parser name for vLLM (required for vLLM mode)
+            max_messages: Maximum message history to keep (None = unlimited)
         """
         self.page_manager = page_manager
         self.db_path = db_path
@@ -114,6 +116,7 @@ class ParallelDatasetGenerator:
         self.max_model_len = max_model_len
         self.custom_prompt = custom_prompt
         self.tool_call_parser = tool_call_parser
+        self.max_messages = max_messages
         self.vllm_llm = None  # Will be initialized if using vLLM mode
         
         # Progress tracking
@@ -605,6 +608,19 @@ Remember: You MUST use the tools to accomplish this task. Start by calling jump_
                     submitted_count = saved_state["submitted_count"]
                     messages = saved_state["messages"]
                     
+                    # Prune message history if limit specified and exceeded
+                    if self.max_messages and len(messages) > self.max_messages:
+                        system_msg = messages[0] if messages and messages[0]["role"] == "system" else None
+                        recent_messages = messages[-10:]
+                        
+                        if system_msg:
+                            messages = [system_msg] + recent_messages
+                        else:
+                            messages = recent_messages
+                        
+                        with self.log_lock:
+                            tqdm.write(f"[Thread {thread_id}] ✂️  Pruned restored message history to {len(messages)} messages (kept system + last 10)")
+                    
                     with self.log_lock:
                         tqdm.write(f"[Thread {thread_id}] 🔄 Resuming from checkpoint: {submitted_count}/{self.datasets_per_thread} pairs completed, at page {current_position}")
                     
@@ -651,6 +667,20 @@ Remember: You MUST use the tools to accomplish this task. Start by calling jump_
                 
                 for iteration in range(max_iterations):
                     try:
+                        # Prune message history if limit specified and exceeded
+                        if self.max_messages and len(messages) > self.max_messages:
+                            # Keep system message + last 10 messages
+                            system_msg = messages[0] if messages and messages[0]["role"] == "system" else None
+                            recent_messages = messages[-10:]
+                            
+                            if system_msg:
+                                messages = [system_msg] + recent_messages
+                            else:
+                                messages = recent_messages
+                            
+                            with self.log_lock:
+                                tqdm.write(f"[Thread {thread_id}] ✂️  Pruned message history to {len(messages)} messages (kept system + last 10)")
+                        
                         # Log conversation length for debugging
                         if iteration % 5 == 0:
                             with self.log_lock:
