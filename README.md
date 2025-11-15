@@ -17,6 +17,7 @@ A powerful CLI tool for extracting text from documents using DeepSeek OCR and ge
 ### 🔧 Advanced
 - [Position Distribution](#position-distribution)
 - [Performance Tuning](#performance-tuning)
+- [Interactive Chat](#interactive-chat)
 - [MCP Server](#mcp-server)
 
 ### 📚 Reference
@@ -170,9 +171,20 @@ bookdatamaker extract book.pdf -o ./extracted
 bookdatamaker extract book.pdf \
   --deepseek-api-url http://your-server:8000/v1 \
   -o ./extracted
+
+# Adjust concurrency for faster processing
+bookdatamaker extract book.pdf \
+  --api-concurrency 8 \
+  -o ./extracted
 ```
 
-The tool uses the same OpenAI-compatible format as the vLLM recipe, with base64-encoded images and the required `extra_body` parameters for optimal OCR performance.
+**Performance Options:**
+- `--api-concurrency N`: Number of concurrent API requests (default: 4)
+  - Higher values = faster processing (if your server can handle it)
+  - Adjust based on your vLLM server capacity and network bandwidth
+  - Example: 8-16 for powerful servers, 2-4 for smaller setups
+
+The tool uses image URLs via a temporary HTTP server (uvicorn/FastAPI) instead of base64 encoding, which is more efficient for vLLM. Images are automatically copied to a temporary directory and served via HTTP, then cleaned up after processing.
 
 ### Local Mode (Transformers)
 
@@ -194,6 +206,12 @@ bookdatamaker extract book.pdf --mode local --device cuda:1 -o ./extracted
 # Process directory of images
 bookdatamaker extract ./images/ --mode local -o ./extracted
 ```
+
+**Performance Options:**
+- `--batch-size N`: Number of images to process in parallel (default: 8)
+  - Higher values = faster processing but more GPU memory
+  - Adjust based on available VRAM
+  - Example: 4 for 8GB VRAM, 8-16 for 24GB+ VRAM
 
 **Device Options:**
 - `cuda` (default): Use default CUDA GPU
@@ -443,6 +461,78 @@ Thread 5: Start at 80%  → Page 80
 - **Small documents** (<50 pages): 2-4 threads
 - **Medium documents** (50-200 pages): 4-8 threads
 - **Large documents** (>200 pages): 8-16 threads
+
+---
+
+## Performance Tuning
+
+Optimize extraction and generation speeds based on your hardware and requirements.
+
+### Stage 1: OCR Extraction
+
+**API Mode (vLLM):**
+```bash
+# Increase concurrent requests (default: 4)
+bookdatamaker extract book.pdf --api-concurrency 8
+
+# Guidelines:
+# - 2-4:  Small vLLM server (1-2 GPUs)
+# - 4-8:  Medium server (2-4 GPUs)
+# - 8-16: Large server (4+ GPUs)
+# - Monitor server load and adjust accordingly
+```
+
+**Local Mode (Transformers):**
+```bash
+# Increase batch size (default: 8)
+bookdatamaker extract book.pdf --mode local --batch-size 16
+
+# Guidelines based on GPU VRAM:
+# - 8GB VRAM:   batch-size 2-4
+# - 16GB VRAM:  batch-size 4-8
+# - 24GB VRAM:  batch-size 8-12
+# - 40GB+ VRAM: batch-size 12-16
+```
+
+### Stage 2: Dataset Generation
+
+**Thread Count:**
+```bash
+# More threads = faster generation (if LLM server can handle it)
+bookdatamaker generate ./extracted \
+  --distribution "10,10,10,10,10,10,10,10,10,10" \
+  --threads 10
+
+# Guidelines:
+# - API mode: 4-16 threads (based on rate limits)
+# - vLLM mode: 4-8 threads (based on GPU capacity)
+# - Local mode: 2-4 threads (memory intensive)
+```
+
+**Message History Management:**
+```bash
+# Limit conversation history to prevent memory issues
+bookdatamaker generate ./extracted \
+  --max-messages 20 \
+  -d dataset.db
+
+# Default: 20 messages (system message + last 10 exchanges)
+# Lower values = less memory, potentially less context
+# Higher values = more memory, better context retention
+```
+
+**Duplicate Detection:**
+- Automatically enabled with 95% similarity threshold
+- Uses rapidfuzz for efficient fuzzy matching
+- Prevents redundant Q&A pairs in the dataset
+
+### Performance Tips
+
+1. **Start Small**: Test with small concurrency/batch sizes first
+2. **Monitor Resources**: Watch GPU memory, CPU usage, and network
+3. **Balance Quality vs Speed**: Higher concurrency may reduce quality
+4. **Network Bandwidth**: API mode performance depends on network speed
+5. **vLLM Configuration**: Use tensor parallelism for multi-GPU setups
 
 ---
 
