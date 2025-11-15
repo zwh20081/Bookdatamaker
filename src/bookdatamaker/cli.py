@@ -65,6 +65,12 @@ def cli(ctx: click.Context) -> None:
     help="Batch size for local transformers processing (default: 8)",
 )
 @click.option(
+    "--api-concurrency",
+    type=int,
+    default=4,
+    help="Concurrent requests for API mode (default: 4)",
+)
+@click.option(
     "--device",
     type=str,
     default="cuda",
@@ -84,6 +90,7 @@ def extract(
     deepseek_api_url: str,
     local_model_path: str,
     batch_size: int,
+    api_concurrency: int,
     device: str,
     plain_text: bool,
 ) -> None:
@@ -100,6 +107,7 @@ def extract(
             deepseek_api_url,
             local_model_path,
             batch_size,
+            api_concurrency,
             device,
             plain_text,
         )
@@ -114,6 +122,7 @@ async def _extract_async(
     api_url: str,
     local_model_path: str,
     batch_size: int,
+    api_concurrency: int,
     device: str,
     plain_text: bool,
 ) -> None:
@@ -145,6 +154,7 @@ async def _extract_async(
             mode=mode,
             local_model_path=local_model_path,
             batch_size=batch_size,
+            api_concurrency=api_concurrency,
             device=device,
             skip_model_load=not needs_ocr,
         ) as extractor:

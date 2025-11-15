@@ -22,6 +22,7 @@ class OCRExtractor:
         batch_size: int = 8,
         device: str = "cuda",
         skip_model_load: bool = False,
+        api_concurrency: int = 4,
     ) -> None:
         """Initialize OCR extractor.
 
@@ -33,6 +34,7 @@ class OCRExtractor:
             batch_size: Batch size for local transformers processing
             device: Torch device for local mode (default: "cuda")
             skip_model_load: Skip loading OCR model (for plain text extraction)
+            api_concurrency: Concurrent requests for API mode (default: 4)
         """
         self.mode = mode
         self.api_key = api_key
@@ -41,7 +43,11 @@ class OCRExtractor:
         self.batch_size = batch_size
         self.device = device
         self.skip_model_load = skip_model_load
+        self.api_concurrency = api_concurrency
         self.llm = None
+        self.http_server = None
+        self.http_thread = None
+        self.temp_dir = None
 
         if mode == "api":
             if not skip_model_load:
@@ -54,6 +60,8 @@ class OCRExtractor:
                     timeout=3600.0,  # Long timeout for OCR processing
                     headers=headers,
                 )
+                # Start HTTP server for serving images
+                self._start_http_server()
             else:
                 self.client = None
         else:
@@ -67,8 +75,10 @@ class OCRExtractor:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Async context manager exit."""
-        if self.mode == "api" and self.client:
-            await self.client.aclose()
+        if self.mode == "api":
+            if self.client:
+                await self.client.aclose()
+            self._stop_http_server()
 
     def _init_local_model(self) -> None:
         """Initialize local transformers model."""
@@ -122,6 +132,92 @@ class OCRExtractor:
         ).to(self.device)
         self.model = self.model.eval()
         
+    def _start_http_server(self, port: int = 8765) -> None:
+        """Start uvicorn HTTP server for serving temporary images.
+        
+        Args:
+            port: Port to bind the HTTP server
+        """
+        import tempfile
+        import threading
+        import socket
+        from fastapi import FastAPI
+        from fastapi.staticfiles import StaticFiles
+        import uvicorn
+        
+        # Create temp directory
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="ocr_images_"))
+        
+        # Find available port
+        self.http_port = port
+        for attempt_port in range(port, port + 100):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('', attempt_port))
+                    self.http_port = attempt_port
+                    break
+            except OSError:
+                continue
+        
+        # Create FastAPI app
+        app = FastAPI()
+        app.mount("/", StaticFiles(directory=str(self.temp_dir)), name="images")
+        
+        # Configure uvicorn with minimal logging
+        config = uvicorn.Config(
+            app=app,
+            host="0.0.0.0",
+            port=self.http_port,
+            log_level="error",
+            access_log=False,
+        )
+        self.http_server = uvicorn.Server(config)
+        
+        # Start server in background thread
+        def run_server():
+            asyncio.new_event_loop().run_until_complete(self.http_server.serve())
+        
+        self.http_thread = threading.Thread(target=run_server, daemon=True)
+        self.http_thread.start()
+        
+        # Wait for server to start
+        import time
+        time.sleep(0.5)
+    
+    def _stop_http_server(self) -> None:
+        """Stop HTTP server and cleanup temp directory."""
+        if self.http_server:
+            self.http_server.should_exit = True
+            if self.http_thread:
+                self.http_thread.join(timeout=2.0)
+            self.http_server = None
+        
+        if self.temp_dir and self.temp_dir.exists():
+            import shutil
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+            self.temp_dir = None
+    
+    def _get_image_url(self, image_path: Path) -> str:
+        """Copy image to temp directory and return URL.
+        
+        Args:
+            image_path: Path to source image
+            
+        Returns:
+            HTTP URL to access the image
+        """
+        import shutil
+        import uuid
+        
+        # Generate unique filename
+        filename = f"{uuid.uuid4().hex}{image_path.suffix}"
+        dest_path = self.temp_dir / filename
+        
+        # Copy image to temp directory
+        shutil.copy2(image_path, dest_path)
+        
+        # Return URL (localhost)
+        return f"http://localhost:{self.http_port}/{filename}"
 
 
     def _encode_image(self, image_path: Path) -> str:
@@ -173,18 +269,18 @@ class OCRExtractor:
         Returns:
             Extracted text content
         """
-        image_b64 = self._encode_image(image_path)
+        # Copy image to temp directory and get URL
+        image_url = self._get_image_url(image_path)
 
-        # Use OpenAI-compatible chat completions endpoint
-        # Format matches vLLM DeepSeek-OCR recipe
+        # Use OpenAI-compatible chat completions endpoint with image_url
         messages = [
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "image": {
-                            "base64": image_b64
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
                         }
                     },
                     {
@@ -296,17 +392,48 @@ class OCRExtractor:
         if self.mode == "local":
             return await self._extract_batch_local(sorted(image_files))
 
-        # Sequential processing for API mode
-        results = []
-        for image_path in sorted(image_files):
-            try:
-                text = await self.extract_text(image_path)
-                results.append((image_path, text))
-            except Exception as e:
-                print(f"Error processing {image_path}: {e}")
-                results.append((image_path, ""))
+        # Concurrent processing for API mode
+        return await self._extract_batch_api(sorted(image_files))
 
-        return results
+    async def _extract_batch_api(self, image_paths: List[Path]) -> List[tuple[Path, str]]:
+        """Batch extract text using API with concurrency control.
+
+        Args:
+            image_paths: List of image paths
+
+        Returns:
+            List of tuples (image_path, extracted_text)
+        """
+        from tqdm import tqdm
+        
+        if not image_paths:
+            return []
+        
+        results = []
+        semaphore = asyncio.Semaphore(self.api_concurrency)
+        
+        async def process_with_semaphore(image_path: Path) -> tuple[Path, str]:
+            async with semaphore:
+                try:
+                    text = await self.extract_text(image_path)
+                    return (image_path, text)
+                except Exception as e:
+                    print(f"\nError processing {image_path}: {e}")
+                    return (image_path, "")
+        
+        # Create tasks for all images
+        tasks = [process_with_semaphore(image_path) for image_path in image_paths]
+        
+        # Process with progress bar
+        with tqdm(total=len(tasks), desc="OCR Processing", unit="image") as pbar:
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                results.append(result)
+                pbar.update(1)
+        
+        # Sort results to match input order
+        path_to_result = {path: text for path, text in results}
+        return [(path, path_to_result[path]) for path in image_paths]
 
     async def _extract_batch_local(self, image_paths: List[Path]) -> List[tuple[Path, str]]:
         """Batch extract text using local transformers model.
