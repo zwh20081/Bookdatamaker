@@ -220,6 +220,27 @@ class OCRExtractor:
         return f"http://localhost:{self.http_port}/{filename}"
 
 
+    def _filter_ocr_text(self, text: str) -> str:
+        """Filter OCR text to remove lines containing [[.....]] pattern and empty lines.
+        
+        This removes bounding box annotations that may appear in API mode output
+        and removes empty lines to make the output more compact.
+        
+        Args:
+            text: Raw OCR text
+            
+        Returns:
+            Filtered text with [[.....]] lines and empty lines removed
+        """
+        import re
+        lines = text.split('\n')
+        # Filter out lines containing [[...]] pattern and empty lines
+        filtered_lines = [
+            line for line in lines 
+            if not re.search(r'\[\[.*?\]\]', line) and line.strip()
+        ]
+        return '\n'.join(filtered_lines)
+    
     def _encode_image(self, image_path: Path) -> str:
         """Encode image to base64.
 
@@ -613,9 +634,10 @@ class OCRExtractor:
                     page_dir = output_dir / f"page_{page_num:03d}"
                     page_dir.mkdir(parents=True, exist_ok=True)
                     
-                    # Save text to result.mmd
+                    # Save text to result.mmd (filter if API mode)
                     result_file = page_dir / "result.mmd"
-                    result_file.write_text(text, encoding="utf-8")
+                    filtered_text = self._filter_ocr_text(text) if self.mode == "api" else text
+                    result_file.write_text(filtered_text, encoding="utf-8")
                     
                     # Save page image
                     image_file = page_dir / f"page_{page_num:03d}.png"
@@ -628,7 +650,8 @@ class OCRExtractor:
                     page_dir = output_dir / f"page_{page_num:03d}"
                     page_dir.mkdir(parents=True, exist_ok=True)
                     result_file = page_dir / "result.mmd"
-                    result_file.write_text(content, encoding="utf-8")
+                    filtered_content = self._filter_ocr_text(content) if self.mode == "api" else content
+                    result_file.write_text(filtered_content, encoding="utf-8")
                 text_results.append((page_num, content))
             else:
                 # Image - need OCR
@@ -664,9 +687,10 @@ class OCRExtractor:
                             page_dir = output_dir / f"page_{page_num:03d}"
                             page_dir.mkdir(parents=True, exist_ok=True)
                             
-                            # Save text to result.mmd
+                            # Save text to result.mmd (filter in API mode)
                             result_file = page_dir / "result.mmd"
-                            result_file.write_text(text, encoding="utf-8")
+                            filtered_text = self._filter_ocr_text(text)
+                            result_file.write_text(filtered_text, encoding="utf-8")
                             
                             # Save page image
                             image_file = page_dir / f"page_{page_num:03d}.png"
